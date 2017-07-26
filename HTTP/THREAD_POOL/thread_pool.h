@@ -13,6 +13,7 @@
 #include <list>
 #include <cstdlib>
 #include <semaphore.h>
+#include <sys/epoll.h>
 
 using namespace std;
 
@@ -20,12 +21,12 @@ template <typename T>
 class threadpool
 {
 public:
-    threadpool(int thread_number = 8, int max_requests = 10000);
+    threadpool(int thread_number = 4, int max_requests = 10000, int fd = -1);
     ~threadpool();
     bool append(T * request);
 private:
-    static void * worker(void *arg);
-    void run();
+    static void * worker(int epfd);
+    void run(int epfd);
 private:
     int m_thread_number;
     int m_max_requests;
@@ -34,9 +35,11 @@ private:
     pthread_mutex_t m_queuelocker;
     sem_t m_queuestat;
     bool m_stop;
+    struct epoll_event ev,events[20];
+    int listen_fd;
 };
 template< typename T >
-threadpool<T>::threadpool(int thread_number, int max_requests):m_thread_number(thread_number), m_max_requests(max_requests),m_stop(false),m_threads(NULL)
+threadpool<T>::threadpool(int thread_number, int max_requests, int fd):m_thread_number(thread_number), m_max_requests(max_requests),listen_fd(fd),m_stop(false),m_threads(NULL)
 {
     if((thread_number<=0) || (max_requests <= 0) )
     {
@@ -55,7 +58,13 @@ threadpool<T>::threadpool(int thread_number, int max_requests):m_thread_number(t
     for(int i = 0; i < thread_number; i++)
     {
         printf("Create the %dth thread.\n",i);
-        if(pthread_create(m_threads+i, NULL, worker, this) != 0)
+        
+        int epfd = epoll_create(256);
+        ev.data.fd = listen_fd;
+        ev.events = EPOLLIN|EPOLLET;
+        epoll_ctl(epfd,EPOLL_CTL_ADD,listen_fd,&ev);
+
+        if(pthread_create(m_threads+i, NULL, worker, epfd) != 0)
         {
             delete [] m_threads;
             /**ERROR**/
@@ -94,16 +103,16 @@ bool threadpool<T>::append(T *request)
 
 
 template< typename T > 
-void *threadpool<T>::worker(void *arg)
+void *threadpool<T>::worker(int epfd)
 {
-    threadpool *pool = (threadpool *)arg;
-    pool->run();
+    threadpool *pool = (threadpool *)epfd;
+    pool->run(epfd);
     return pool;
 }
 
 
 template< typename T > 
-void threadpool<T>::run()
+void threadpool<T>::run(int epfd)
 {
     while(!m_stop)
     {
@@ -119,7 +128,7 @@ void threadpool<T>::run()
        pthread_mutex_unlock(&m_queuelocker);
 
        if(!request) continue;
-       request->process();
+       request->process(epfd);//fd
     }
 }
 

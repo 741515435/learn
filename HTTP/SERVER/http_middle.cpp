@@ -6,11 +6,17 @@
  ************************************************************************/
 
 #include <iostream>
-#include "http_simple.h"
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include "thread_create.h"
+
 using namespace std;
 
-void init();
-void HttpWork();
+void work();
+void setNonBlocking(int fd);
+
 
 class Mainthread
 {
@@ -19,22 +25,30 @@ public:
     {
         //
         port = PORT;
-        server_fd = sockt(AF_INET, SOCK_STREAM, 0);
-        memset(&server_addr, 0, soizeof(server_addr));
+        server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        memset(&server_addr, 0, sizeof(server_addr));
+        
+
+      // setNonBlocking(server_fd);
 
         server_addr.sin_family = AF_INET;
         server_addr.sin_port = htons(port);
         server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
         
-        int opt = SO_REUSEADDR;
+        int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 
         bind(server_fd,(struct sockaddr *) &server_addr, sizeof(server_addr));
-        
+
         listen(server_fd, QUEUE_MAX_COUNT);
 
-        while(1)
-        start();
+        for(int i = 0; i < threadnum; i++)
+            epfd[i] = epoll_create(256);
+        Pool = new threadpool<int>(threadnum, 1000, epfd);
+
+        cout<<"Init success"<<endl;
+
     }
 
     ~Mainthread()
@@ -42,43 +56,61 @@ public:
         //
     }
 
-    void *start()
+    void start()
     {
-        sonThread(client_fd);
-    }
-
-    void sonThread(int client_fd)
-    {
-        /////
+            cout<<"Start"<<endl;
+        while(1)
+        {
+            
+            for(int i = 0; i < threadnum; i ++)
+		{
+            client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+            setNonBlocking(client_fd);
+            ev.data.fd = client_fd;
+            ev.events = EPOLLIN;
+            epoll_ctl(epfd[i], EPOLL_CTL_ADD, client_fd, &ev);
+            
+            }
+        }
     }
 
 public:
     int server_fd;
     int client_fd;
+    int epfd[15];
+
 
     ushort port;
     struct sockaddr_in client_addr;
     struct sockaddr_in server_addr;
     socklen_t client_addr_len = sizeof(client_addr);
-    char buf[BUFF_SIZE];
-    char recv_buff[BUFF_SIZE];
-    char hello_str[] = "Hello world!";
-}
+
+    int threadnum = 8;
+    struct epoll_event ev;
+    threadpool<int> *Pool;
+};
 
 int main(void)
 {
-    init();
-    while(1)
-    {
-        HttpWork();
-    }
+    work();
     return 0;
 }
 
 
-void init()
+void work()
 {
-    
+    Mainthread Sln;
+    Sln.start();
 }
 
+
+void setNonBlocking(int sockfd)
+{
+    if(fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFD, 0 ) | O_NONBLOCK) == -1) //F_SETFl :set the file describe flag, F_GETFD:get the FD_CLOEXEC value
+    {
+        printf("set NonBlocking error()\n");
+        exit(1);
+    }
+    //set file marks
+}
 
