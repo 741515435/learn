@@ -1,8 +1,8 @@
 /*************************************************************************
-    > File Name: http_middle.cpp
-    > Author: xxx
-    > Mail: XXX.com
-    > Created Time: 2017年07月24日 星期一 20时05分06秒
+  > File Name: http_middle.cpp
+  > Author: xxx
+  > Mail: XXX.com
+  > Created Time: 2017年07月24日 星期一 20时05分06秒
  ************************************************************************/
 
 #include <iostream>
@@ -27,25 +27,30 @@ public:
         port = PORT;
         server_fd = socket(AF_INET, SOCK_STREAM, 0);
         memset(&server_addr, 0, sizeof(server_addr));
-        
 
-      // setNonBlocking(server_fd);
+
+        // setNonBlocking(server_fd);
 
         server_addr.sin_family = AF_INET;
         server_addr.sin_port = htons(port);
         server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        
+
+
+        int ret = bind(server_fd,(struct sockaddr *) &server_addr, sizeof(server_addr));
+        if (ret < 0) {
+            perror("bind");
+            exit(0);
+        }
         int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 
-        bind(server_fd,(struct sockaddr *) &server_addr, sizeof(server_addr));
 
         listen(server_fd, QUEUE_MAX_COUNT);
 
         for(int i = 0; i < threadnum; i++)
             epfd[i] = epoll_create(256);
-        Pool = new threadpool<int>(threadnum, 1000, epfd);
+        Pool = new threadpool<int>(threadnum, epfd);
 
         cout<<"Init success"<<endl;
 
@@ -58,25 +63,30 @@ public:
 
     void start()
     {
-            cout<<"Start"<<endl;
+        cout<<"Start"<<endl;
         while(1)
         {
-            
+            replace *rp;
+
             for(int i = 0; i < threadnum; i ++)
-		{
-            client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
-            setNonBlocking(client_fd);
-            ev.data.fd = client_fd;
-            ev.events = EPOLLIN;
-            epoll_ctl(epfd[i], EPOLL_CTL_ADD, client_fd, &ev);
-            
+            {
+                int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+                setNonBlocking(client_fd);
+                rp = new replace;
+                rp->fd = client_fd;
+                bzero(&ev, sizeof(ev));
+                ev.data.ptr = rp;
+                ev.events = EPOLLIN | EPOLLET;
+                /* ev.data.fd = client_fd; */
+                epoll_ctl(epfd[i], EPOLL_CTL_ADD, client_fd, &ev);
             }
+            cout << "77" << endl;
         }
     }
 
 public:
     int server_fd;
-    int client_fd;
+    /* int client_fd; */
     int epfd[15];
 
 
@@ -92,6 +102,7 @@ public:
 
 int main(void)
 {
+    /* signal(SIGPIPE, SIG_IGN); */
     work();
     return 0;
 }
