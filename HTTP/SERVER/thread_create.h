@@ -23,12 +23,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <map>
+#include <sys/sendfile.h>
 #include "write_log.h"
+#include "conifig_http.h"
 
-#define PORT 9002
-#define QUEUE_MAX_COUNT 100
-#define BUFF_SIZE 1024
+
 
 #define SERVER_STRING_200 "HTTP/1.0 200 OK\r\nServer: hoohackhttpd/0.1.0\r\ncontent-Type: text/html\r\n\r\n"
 
@@ -36,19 +35,19 @@
 
 using namespace std;
 
+
+void process(struct epoll_event ev, int epoll_fd);
+void hander_request(struct epoll_event ev, int epoll_fd);
+void ERROR_404(int fd,char buf[]);
+void OK_200(int fd, char buf[], int filefd, char filename[]);
+void OK_200_2(int fd, char buf[], char content[]);
+void DEFAULT(int fd, char buf[]);
+
 struct replace
 {
     int fd;
     char *request;
 };
-
-
-
-void process(struct epoll_event ev, int epoll_fd);
-void hander_request(struct epoll_event ev, int epoll_fd);
-void ERROR_404(int fd,char buf[]);
-void OK_200(int fd, char buf[], char content[]);
-void DEFAULT(int fd, char buf[]);
 
 void process(struct epoll_event ev, int epoll_fd)
 {
@@ -67,8 +66,9 @@ void process(struct epoll_event ev, int epoll_fd)
     {
         if(recv_buf[i] == '.' && recv_buf[i-1] == '.')
         {
-            printf("ERROR_404\n");
+           // printf("ERROR_404\n");
             ERROR_404(sockfd,buf);
+            close(sockfd);
             return;
         }
         ss[i-5] = recv_buf[i],ss[i-4] = 0;
@@ -79,22 +79,15 @@ void process(struct epoll_event ev, int epoll_fd)
     ev.events = EPOLLOUT;
 
     epoll_ctl(epoll_fd,EPOLL_CTL_MOD,sockfd,&ev);
-    //hander_request(recv_buf,client_fd);
-
-    // close(client_fd);
-
 }
 
 void hander_request(struct epoll_event ev, int epoll_fd)
 {
     char content[1024],buf[2000], ss[2000];
     replace *res = (replace*)(ev.data.ptr);
-    /* int sockfd = res->fd; */
     int sockfd = res->fd;
     strcpy(ss,res->request);
-    // ERROR_404(sockfd,buf);
-    //return;
-    printf("GET \%s\n",ss);
+    //printf("GET \%s\n",ss);
 
     if(strlen(ss) == 0)
     {
@@ -102,21 +95,26 @@ void hander_request(struct epoll_event ev, int epoll_fd)
     }
     else
     {
-        FILE *pFILE;
-        pFILE = fopen(ss,"r");
-        if(pFILE == NULL)
+        //int filefd;
+       // filefd = open(ss,O_RDONLY);
+        FILE *pFile;
+        pFile = fopen(ss,"r");
+
+        if(pFile == NULL)
         {
             ERROR_404(sockfd,buf);
         }
         else
         {
-            printf("OK_200\n");
-            fscanf(pFILE,"%s",content);
-            fclose(pFILE);
-            OK_200(sockfd,buf,content);
+            //printf("OK_200\n");
+            //OK_200(sockfd,buf,filefd,ss);
+            
+            fscanf(pFile,"%s",content);
+            fclose(pFile);
+            OK_200_2(sockfd,buf,content);
         }
     }
-    printf("%d send over\n", sockfd);
+   // printf("%d send over\n", sockfd);
 
     epoll_ctl(epoll_fd,EPOLL_CTL_DEL,sockfd,&ev);
     /* delete res; */
@@ -131,30 +129,41 @@ void ERROR_404(int fd,char buf[])
         printf("error 132\n");
         /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f",'a',"log:Send error 404()", 1.000); */
     // close(fd);
-    return;
 }
 
-void OK_200(int fd, char buf[], char content[])
+void OK_200(int fd, char buf[], int filefd, char filename[])
 {
+    off_t off_set = 0;
+    struct stat filestat;
+
+    stat(filename, &filestat);
+
     strcpy(buf, SERVER_STRING_200);
     if( send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1) 
         printf("error142\n");
         /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f", 'a',"log:Send error 200", 1.000); */
-    sprintf(buf, "%s\r\n",content);
-    if(send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1) printf("Send error() 200: %s\n", strerror(errno));
-    // close(fd);
+   // sprintf(buf, "%s\r\n",content);
+    if(sendfile(fd, filefd, &off_set, filestat.st_size) == -1) printf("Send error() 200: %s\n", strerror(errno));
+    close(filefd);
+}
+
+void OK_200_2(int fd, char buf[], char content[])
+{
+    strcat(content,"\r\n");
+    strcpy(buf, SERVER_STRING_200);
+    strcat(buf,content);
+    if( send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1) 
+        printf("error142\n");
+        /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f", 'a',"log:Send error 200", 1.000); */
+
 }
 void DEFAULT(int fd, char buf[])
 {
     strcpy(buf, SERVER_STRING_200);
+    strcat(buf,"Hello world! This is a default page.\r\n");
     if(send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1) 
         printf("error 152\n");
         /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f", 'a',"log:Send error default1", 1.000); */
-    sprintf(buf, "Hello world! This is a default page.\r\n");
-    if(send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1) 
-        printf("error 156\n");
-        /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f", 'a',"log:Send error default2", 1.000); */
-    // close(fd);
 }
 
 
@@ -206,10 +215,9 @@ threadpool<T>::threadpool(int thread_number, int* epfd):m_thread_number(thread_n
             exit(1);
         }
     }
-
-    Log::get_instance()->init("./mylog.log", 100, 5000, 10);
-    // Mfd.clear();
 }
+
+
 template< typename T > 
 threadpool<T>::~threadpool()
 {
@@ -226,14 +234,12 @@ void *threadpool<T>::worker(void *arg)
     {
         nfds = epoll_wait(epollfd,events,sizeof(events), -1);
 
-        //sleep(1);
 
         for(int i = 0; i < nfds; i++)
         {
             if(events[i].events & EPOLLIN)
             {
                 process(events[i],epollfd);
-                //close(events[i].data.fd);
             }
             else if(events[i].events & EPOLLOUT)
             {
