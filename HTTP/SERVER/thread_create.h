@@ -29,23 +29,33 @@
 
 
 
-#define SERVER_STRING_200 "HTTP/1.0 200 OK\r\nServer: hoohackhttpd/0.1.0\r\ncontent-Type: text/html\r\n\r\n"
+#define SERVER_STRING_200 "HTTP/1.1 200 OK\r\nServer: hoohackhttpd/0.1.0\r\ncontent-Type: text/html\r\n\r\n"
+#define SERVER_STRING_200_ALIVE "HTTP/1.1 200 OK\r\nServer: hoohackhttpd/0.1.0\r\nConnection: Keep-Alive\r\ncontent-Type: text/html\r\n\r\n"
 
-#define SERVER_STRING_404 "HTTP/1.0 404 ERROR\r\nServer: hoohackhttpd/0.1.0\r\ncontent-Type: text/html\r\n\r\n404 NOT FOUND\r\n"
+#define SERVER_STRING_404 "HTTP/1.1 404 ERROR\r\nServer: hoohackhttpd/0.1.0\r\ncontent-Type: text/html\r\n\r\n404 NOT FOUND\r\n"
+#define SERVER_STRING_404_ALIVE "HTTP/1.1 404 ERROR\r\nServer: hoohackhttpd/0.1.0\r\nConnection: Keep-Alive\r\ncontent-Type: text/html\r\n\r\n404 NOT FOUND\r\n"
+
+#define SEND_ERROR "Send error"
+#define RECV_ERROR "Recv error"
+#define EPOLL_DEL_ERROR "Epoll del error"
+#define EPOLL_MOD_ERROR "Epoll mod error"
+#define EPOLL_IN_ERROR "Epoll in error"
+#define EPOLL_OUT_ERROR "Epoll out error"
 
 using namespace std;
 
 
 void process(struct epoll_event ev, int epoll_fd);
 void hander_request(struct epoll_event ev, int epoll_fd);
-void ERROR_404(int fd,char buf[]);
+void ERROR_404(int fd,char buf[], int keep_alive);
 void OK_200(int fd, char buf[], int filefd, char filename[]);
-void OK_200_2(int fd, char buf[], char content[]);
-void DEFAULT(int fd, char buf[]);
+void OK_200_2(int fd, char buf[], char content[],int keep_alive);
+void DEFAULT(int fd, char buf[], int keep_alive);
 
 struct replace
 {
-    int fd;
+    int   fd;
+    int   keep_alive;
     char *request;
 };
 
@@ -58,27 +68,68 @@ void process(struct epoll_event ev, int epoll_fd)
     int sockfd = res->fd;
 
     len = recv(sockfd, recv_buf, BUFF_SIZE,0);
-    if(len == -1) 
-        printf("error63\n");
-        /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f", 'a',"log:Recv error()", 1.000); */
-    /* printf("%s\n",recv_buf); */
-    for(int i = 5; recv_buf[i] != ' '; i++)
+    if(len == -1)
     {
-        if(recv_buf[i] == '.' && recv_buf[i-1] == '.')
-        {
-           // printf("ERROR_404\n");
-            ERROR_404(sockfd,buf);
-            close(sockfd);
-            return;
-        }
-        ss[i-5] = recv_buf[i],ss[i-4] = 0;
+        if(!USE_LOG)
+            perror("error63");
+        else
+            LOG_ERROR("name = %s, s = %s.","process", RECV_ERROR); 
+
     }
+    else if(len == 0)
+    {
+        if(epoll_ctl(epoll_fd,EPOLL_CTL_DEL,sockfd,&ev) ==-1)
+        {
+            if(!USE_LOG)
+                perror("Epoll_del len == 0 error");
+            else
+                LOG_ERROR("name = %s, s = %s", "process",EPOLL_DEL_ERROR);
+        }
+        close(sockfd);
+    }
+    else
+    {
+        //printf("%s\n",recv_buf); 
+        for(int i = 5; recv_buf[i] != ' '; i++)
+        {
+            if(recv_buf[i] == '.' && recv_buf[i-1] == '.')
+            {
+                ERROR_404(sockfd,buf,0);
+                if( epoll_ctl(epoll_fd,EPOLL_CTL_DEL,sockfd,&ev) == -1)
+                {
+                    if(!USE_LOG)
+                        perror("epoll_DEL error");
+                    else
+                        LOG_WARN("name = %s, s = %s%s","process",EPOLL_DEL_ERROR, "error dir path");
+                }
+                close(sockfd);
+                return;
+            }
+            ss[i-5] = recv_buf[i],ss[i-4] = 0;
+        }
+        if(KEEP_ALIVE && strstr(recv_buf,"Keep-Alive") != NULL)
+        {
+            res->keep_alive = 1;
+        }
+        else
+        {
+            res->keep_alive = 0;
+        }
 
-    res->request = new char[strlen(ss)]; 
-    strcpy(res->request,ss);
-    ev.events = EPOLLOUT;
+        res->request = new char[strlen(ss)]; 
+        strcpy(res->request,ss);
+        ev.events = EPOLLOUT|EPOLLET;
+            
+        if(epoll_ctl(epoll_fd,EPOLL_CTL_MOD,sockfd,&ev) == -1)
+        {
+            if(!USE_LOG)
+                perror("Epoll_mod error");
+            else
+                LOG_ERROR("name = %s, s = %s.","process",EPOLL_MOD_ERROR);
+            exit(1);
+        }
 
-    epoll_ctl(epoll_fd,EPOLL_CTL_MOD,sockfd,&ev);
+    }
 }
 
 void hander_request(struct epoll_event ev, int epoll_fd)
@@ -86,12 +137,12 @@ void hander_request(struct epoll_event ev, int epoll_fd)
     char content[1024],buf[2000], ss[2000];
     replace *res = (replace*)(ev.data.ptr);
     int sockfd = res->fd;
+    int keep_alive = res->keep_alive;
     strcpy(ss,res->request);
-    //printf("GET \%s\n",ss);
 
     if(strlen(ss) == 0)
     {
-        DEFAULT(sockfd,buf);
+        DEFAULT(sockfd,buf,keep_alive);
     }
     else
     {
@@ -102,33 +153,59 @@ void hander_request(struct epoll_event ev, int epoll_fd)
 
         if(pFile == NULL)
         {
-            ERROR_404(sockfd,buf);
+            ERROR_404(sockfd,buf,keep_alive);
         }
         else
         {
             //printf("OK_200\n");
             //OK_200(sockfd,buf,filefd,ss);
-            
+    
             fscanf(pFile,"%s",content);
             fclose(pFile);
-            OK_200_2(sockfd,buf,content);
+            OK_200_2(sockfd,buf,content,keep_alive);
         }
     }
-   // printf("%d send over\n", sockfd);
 
-    epoll_ctl(epoll_fd,EPOLL_CTL_DEL,sockfd,&ev);
-    /* delete res; */
-    close(sockfd);
-
+    if(keep_alive)
+    {
+        ev.events = EPOLLIN | EPOLLET;
+        if(epoll_ctl(epoll_fd,EPOLL_CTL_MOD,sockfd,&ev) == -1)
+        {
+            if(!USE_LOG)
+                perror("Epoll_mod error");
+            else
+                LOG_ERROR("name = %s, s = %s.","hander_request",EPOLL_MOD_ERROR);
+            exit(1);
+        }
+    }
+    else
+    {
+        if(epoll_ctl(epoll_fd,EPOLL_CTL_DEL,sockfd,&ev) == -1)
+        {
+            if(!USE_LOG)
+                perror("Epoll_del error");
+            else
+                LOG_ERROR("name = %s, s = %s.","hander_request",EPOLL_DEL_ERROR);
+            exit(1);
+        }
+        close(sockfd);
+    }
 }
 
-void ERROR_404(int fd,char buf[])
+void ERROR_404(int fd,char buf[], int keep_alive)
 {
-    strcpy(buf, SERVER_STRING_404);
-    if(send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1) 
-        printf("error 132\n");
-        /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f",'a',"log:Send error 404()", 1.000); */
-    // close(fd);
+    if(!keep_alive)
+        strcpy(buf, SERVER_STRING_404);
+    else
+        strcpy(buf, SERVER_STRING_404_ALIVE);
+
+    if(send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1)
+    {
+        if(!USE_LOG)
+            perror("error 132\n");
+        else
+            LOG_WARN("name = %s, s = %s.","ERROR_404",SEND_ERROR);
+    }
 }
 
 void OK_200(int fd, char buf[], int filefd, char filename[])
@@ -147,23 +224,40 @@ void OK_200(int fd, char buf[], int filefd, char filename[])
     close(filefd);
 }
 
-void OK_200_2(int fd, char buf[], char content[])
+void OK_200_2(int fd, char buf[], char content[], int keep_alive)
 {
     strcat(content,"\r\n");
-    strcpy(buf, SERVER_STRING_200);
-    strcat(buf,content);
-    if( send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1) 
-        printf("error142\n");
-        /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f", 'a',"log:Send error 200", 1.000); */
+    if(!keep_alive)
+        strcpy(buf, SERVER_STRING_200);
+    else
+        strcpy(buf, SERVER_STRING_200_ALIVE);
 
+    strcat(buf,content);
+    if( send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1)
+    {
+        if(!USE_LOG)
+            perror("error 142");
+        else
+            LOG_WARN("name = %s, s = %s.","OK_200_2",SEND_ERROR);
+    }
 }
-void DEFAULT(int fd, char buf[])
+
+void DEFAULT(int fd, char buf[], int keep_alive)
 {
-    strcpy(buf, SERVER_STRING_200);
+    if(!keep_alive)
+        strcpy(buf, SERVER_STRING_200);
+    else
+        strcpy(buf, SERVER_STRING_200_ALIVE);
+
     strcat(buf,"Hello world! This is a default page.\r\n");
-    if(send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1) 
-        printf("error 152\n");
-        /* Log::get_instance()->write_log(1, "c=%c,s=%s,f=%f", 'a',"log:Send error default1", 1.000); */
+    if(send(fd, buf, strlen(buf), MSG_NOSIGNAL) == -1)
+    {
+        if(!USE_LOG)
+            printf("error 152\n");
+        else
+            LOG_WARN("name = %s,s = %s","DEFAULT",SEND_ERROR );
+
+    }
 }
 
 
@@ -228,7 +322,7 @@ template< typename T >
 void *threadpool<T>::worker(void *arg)
 {
     int epollfd = *(int*)(arg);
-    struct epoll_event events[1024];
+    struct epoll_event events[2000];
     int nfds;
     while(1)
     {

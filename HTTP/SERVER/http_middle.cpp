@@ -23,15 +23,17 @@ public:
     Mainthread()
     {
         //
-        config_init();
-        Log::get_instance()->init(LOG_NAME, 200, LOG_SPLIT_LINES, LOG_MAX_QUEUE_SIZE);
+        
+        if( config_init() == -1)
+        {
+            perror("init config error");
+            exit(1);
+        }   
+        Log::get_instance()->init(LOG_NAME, 500, LOG_SPLIT_LINES, LOG_MAX_QUEUE_SIZE);
         threadnum = THREAD_NUMBER;
         port = PORT;
         server_fd = socket(AF_INET, SOCK_STREAM, 0);
         memset(&server_addr, 0, sizeof(server_addr));
-
-
-        // setNonBlocking(server_fd);
 
         server_addr.sin_family = AF_INET;
         server_addr.sin_port = htons(port);
@@ -46,13 +48,20 @@ public:
         int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
-       // setsockopt(server_fd, IPPROTO_TCP, TCP_CORK, &opt, sizeof(opt))
 
 
-        listen(server_fd, QUEUE_MAX_COUNT);
+        if(listen(server_fd, QUEUE_MAX_COUNT) == -1)
+        {
+            perror("listen error");
+            exit(1);
+        }
 
         for(int i = 0; i < threadnum; i++)
+        { 
             epfd[i] = epoll_create(256);
+            if(epfd[i] < 0)
+                perror("Creat epfd error");
+        }
         Pool = new threadpool<int>(threadnum, epfd);
 
         cout<<"Init success"<<endl;
@@ -74,23 +83,44 @@ public:
             for(int i = 0; i < threadnum; i ++)
             {
                 int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+                if(client_fd < 0)
+                {
+                    perror("client_fd error");
+                    continue;
+                }
                 setNonBlocking(client_fd);
                 rp = new replace;
                 rp->fd = client_fd;
                 bzero(&ev, sizeof(ev));
                 ev.data.ptr = rp;
                 ev.events = EPOLLIN | EPOLLET;
-                epoll_ctl(epfd[i], EPOLL_CTL_ADD, client_fd, &ev);
+                if(epoll_ctl(epfd[i], EPOLL_CTL_ADD, client_fd, &ev) == -1)
+                {
+                    perror("Epoll_add error");
+                    continue;
+                }
+                if(USE_LOG)
+                {
+                    LOG_INFO("login user: %d login port: %d.",client_addr.sin_addr.s_addr,client_addr.sin_port); 
+                }
             }
-            //cout << "77" << endl;
         }
     }
 
     void setNonBlocking(int sockfd)
     {
-        if(fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFD, 0 ) | O_NONBLOCK) == -1) //F_SETFl :set the file describe flag, F_GETFD:get the FD_CLOEXEC value
+        int opts;
+        opts = fcntl(sockfd,F_GETFL);
+
+        if(opts < 0)
         {
-            printf("set NonBlocking error()\n");
+            perror("fcntl(sock,GETFL)");
+            exit(1);
+        }
+        opts = opts | O_NONBLOCK;
+        if(fcntl(sockfd,F_SETFL,opts) < 0)
+        {
+            perror("fcntl(sockfd,SETFL,opts)");
             exit(1);
         }
     }

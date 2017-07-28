@@ -11,19 +11,24 @@
 #define BUFF_SIZE 1024
 #include <stdlib.h>
 
-int PORT; //9002
-int QUEUE_MAX_COUNT; //100
+int  PORT; //9002
+int  QUEUE_MAX_COUNT; //100
 int  THREAD_NUMBER; //4
 char LOG_NAME[20]; //"./my_log"
-int LOG_SPLIT_LINES;
-int LOG_MAX_QUEUE_SIZE;
+int  LOG_SPLIT_LINES;
+int  LOG_MAX_QUEUE_SIZE;
+int  KEEP_ALIVE;
+int  USE_LOG;
 
 void Display();
 
-void config_init()
+int config_init()
 {
     FILE *pFile;
     pFile = fopen("config.ini","r");
+
+    if(pFile == NULL)
+        return -1;
 
     //PORT
     fscanf(pFile,"%*s%d",&PORT);
@@ -45,6 +50,21 @@ void config_init()
     {
         QUEUE_MAX_COUNT = 2048;
     }
+    
+    //KEEP_ALIVE
+    fscanf(pFile,"%*s%d",&KEEP_ALIVE);
+    if(KEEP_ALIVE < 0)
+    {
+        KEEP_ALIVE = 0;
+    }
+    
+    //USE_LOG
+    fscanf(pFile,"%*s%d",&USE_LOG);
+    if(USE_LOG < 0)
+    {
+        USE_LOG = 0;
+    }
+
     //LOG_NAME
     fscanf(pFile,"%*s%s",LOG_NAME);
     if(strlen(LOG_NAME) > 100)
@@ -65,6 +85,8 @@ void config_init()
     }
     fclose(pFile);
     Display();
+
+    return 1;
 }
 
 void Display()
@@ -73,6 +95,8 @@ void Display()
     printf("/***  PORT:                      %d **********************/\n",PORT);
     printf("/***  THREAD NUMBER:             %d **********************/\n",THREAD_NUMBER);
     printf("/***  QUEUE MAX COUNT:           %d **********************/\n",QUEUE_MAX_COUNT);
+    printf("/***  KEEP_ALIVE:                %s **********************/\n",KEEP_ALIVE == 0?"false":"true");
+    printf("/***  LOG_USE:                   %s **********************/\n",USE_LOG == 0 ? "false":"true");
     printf("/***  LOG_NAME:                  %s **********************/\n",LOG_NAME);
     printf("/***  LOG_SPLIT_LINES:           %d **********************/\n",LOG_SPLIT_LINES);
     printf("/***  LOG_MAX_QUEUE_SIZE:        %d **********************/\n",LOG_MAX_QUEUE_SIZE);
